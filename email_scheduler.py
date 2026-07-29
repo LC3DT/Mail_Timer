@@ -100,6 +100,8 @@ def load_config() -> dict:
         "schedule_type": os.getenv("SCHEDULE_TYPE", "once").lower(),
         "schedule_time": os.getenv("SCHEDULE_TIME", ""),
         "schedule_cron": os.getenv("SCHEDULE_CRON", ""),
+        # 预览模式
+        "dry_run": os.getenv("DRY_RUN", "False").lower() in ("true", "1", "yes"),
     }
 
     return config
@@ -109,20 +111,38 @@ def resolve_body_files(config: dict) -> None:
     """
     如果配置了 BODY_TEXT_FILE / BODY_HTML_FILE，从外部文件加载正文内容。
     文件内容优先级高于内联 BODY_TEXT / BODY_HTML。
+
+    规则：
+      - 指定了文件 → 用文件内容覆盖对应内联值
+      - 未指定文件 → 保留内联值作为回退
+      - 只指定一边文件时，自动清空另一边的内联回退值，避免意外混入 HTML/文本
     """
-    if config["body_text_file"]:
+    has_text_file = bool(config["body_text_file"])
+    has_html_file = bool(config["body_html_file"])
+
+    if has_text_file:
         path = Path(config["body_text_file"])
         if not path.is_file():
             raise FileNotFoundError(f"正文文本文件不存在：{path.resolve()}")
         config["body_text"] = path.read_text(encoding="utf-8")
         logger.info(f"已从文件加载纯文本正文：{path.name}（{len(config['body_text'])} 字符）")
 
-    if config["body_html_file"]:
+    if has_html_file:
         path = Path(config["body_html_file"])
         if not path.is_file():
             raise FileNotFoundError(f"正文 HTML 文件不存在：{path.resolve()}")
         config["body_html"] = path.read_text(encoding="utf-8")
         logger.info(f"已从文件加载 HTML 正文：{path.name}（{len(config['body_html'])} 字符）")
+
+    # 只指定了一边文件时，清空另一边的内联回退值，避免意外混入
+    if has_text_file and not has_html_file:
+        if config["body_html"]:
+            logger.info("已忽略内联 BODY_HTML（仅使用文本文件正文）。")
+        config["body_html"] = ""
+    elif has_html_file and not has_text_file:
+        if config["body_text"]:
+            logger.info("已忽略内联 BODY_TEXT（仅使用 HTML 文件正文）。")
+        config["body_text"] = ""
 
 
 # ============================================================
@@ -212,22 +232,24 @@ def build_message(
             final_text += f"\n发送时间：{send_time_str}"
 
     # 构建 HTML 正文：原始正文 + 签名（HTML） + 发送时间
+    # 注意：仅当用户确实提供了 HTML 正文时才构建 HTML 签名/时间脚注
     final_html = body_html
-    html_sig = signature_html or (f"<p>{signature}</p>" if signature else "")
-    html_time = f'<p style="color:#888;font-size:12px;">发送时间：{send_time_str}</p>' if send_time_str else ""
+    if body_html:
+        html_sig = signature_html or (f"<p>{signature}</p>" if signature else "")
+        html_time = f'<p style="color:#888;font-size:12px;">发送时间：{send_time_str}</p>' if send_time_str else ""
 
-    footer_html = ""
-    if html_sig or html_time:
-        footer_html = (
-            '\n<hr style="border:none;border-top:1px solid #ccc;margin-top:20px;">\n'
-            f'<div style="color:#666;font-size:13px;">{html_sig}{html_time}</div>'
-        )
+        footer_html = ""
+        if html_sig or html_time:
+            footer_html = (
+                '\n<hr style="border:none;border-top:1px solid #ccc;margin-top:20px;">\n'
+                f'<div style="color:#666;font-size:13px;">{html_sig}{html_time}</div>'
+            )
 
-    if footer_html:
-        if "</body>" in final_html:
-            final_html = final_html.replace("</body>", f"{footer_html}\n</body>")
-        else:
-            final_html += footer_html
+        if footer_html:
+            if "</body>" in final_html:
+                final_html = final_html.replace("</body>", f"{footer_html}\n</body>")
+            else:
+                final_html += footer_html
 
     msg = MIMEMultipart("mixed")
     msg["From"] = sender
@@ -237,17 +259,31 @@ def build_message(
     msg["Subject"] = subject
     msg["Date"] = email_utils.formatdate(localtime=True)
 
-    # 正文（alternative：纯文本 / HTML）
-    body_part = MIMEMultipart("alternative")
-    if final_text:
+    # 正文：仅当同时有纯文本和 HTML 时才用 multipart/alternative 包装
+    # 若只有单种格式，直接附加 MIMEText，避免部分客户端（如 Bossmail）不渲染
+    has_text = bool(final_text)
+    has_html = bool(final_html)
+
+    if has_text and has_html:
+        body_part: object = MIMEMultipart("alternative")
         body_part.attach(MIMEText(final_text, "plain", "utf-8"))
-    if final_html:
         body_part.attach(MIMEText(final_html, "html", "utf-8"))
-    msg.attach(body_part)
+        msg.attach(body_part)
+    elif has_html:
+        msg.attach(MIMEText(final_html, "html", "utf-8"))
+    elif has_text:
+        msg.attach(MIMEText(final_text, "plain", "utf-8"))
 
     # 附件
     for file_path in attachments:
         _attach_file(msg, file_path)
+
+    # 若无附件且只有一种正文格式，去掉多余的 multipart/mixed 外层，直接返回纯 MIMEText
+    if not attachments and (has_text != has_html):  # XOR — 只有一种正文
+        # 提取 msg 中唯一的正文部分直接返回
+        payload = msg.get_payload()
+        if isinstance(payload, list) and len(payload) == 1:
+            return payload[0]
 
     return msg
 
@@ -345,6 +381,70 @@ def send_email(config: dict) -> bool:
                 server.quit()
             except Exception:
                 pass
+
+
+# ============================================================
+# 预览模式
+# ============================================================
+def dry_run_preview(config: dict) -> None:
+    """预览邮件完整内容（不连接 SMTP，不发送）。"""
+    logger.info("=" * 50)
+    logger.info("[Preview] DRY_RUN 预览模式 —— 不会实际发送邮件")
+    logger.info("=" * 50)
+
+    msg = build_message(
+        sender=config["sender_email"],
+        recipients=config["recipients"],
+        cc=config["cc"],
+        subject=config["subject"],
+        body_text=config["body_text"],
+        body_html=config["body_html"],
+        attachments=config["attachments"],
+        signature=config.get("signature", ""),
+        signature_html=config.get("signature_html", ""),
+        show_send_time=config.get("show_send_time", True),
+    )
+
+    print()
+    print("╔" + "═" * 58 + "╗")
+    print("║" + "   📧 邮件预览（DRY RUN）".ljust(48) + "║")
+    print("╠" + "═" * 58 + "╣")
+    print(f"║  发件人: {config['sender_email']}".ljust(49) + "║")
+    print(f"║  收件人: {', '.join(config['recipients'])}".ljust(49) + "║")
+    if config["cc"]:
+        print(f"║  抄  送: {', '.join(config['cc'])}".ljust(49) + "║")
+    print(f"║  主  题: {config['subject']}".ljust(49) + "║")
+    print(f"║  附  件: {len(config['attachments'])} 个".ljust(49) + "║")
+    if config["attachments"]:
+        for a in config["attachments"]:
+            print(f"║         - {a}".ljust(49) + "║")
+    print("╠" + "═" * 58 + "╣")
+
+    # 展示纯文本正文
+    if config["body_text"]:
+        print("║  [纯文本正文]".ljust(49) + "║")
+        print("╟" + "─" * 58 + "╢")
+        for line in config["body_text"].split("\n"):
+            # 截断过长行
+            display = line[:55] + "..." if len(line) > 55 else line
+            print(f"║  {display}".ljust(49) + "║")
+        print("╟" + "─" * 58 + "╢")
+
+    # 展示 HTML 正文大小
+    if config["body_html"]:
+        html_len = len(config["body_html"])
+        print(f"║  [HTML 正文] 共 {html_len} 字符".ljust(49) + "║")
+        if html_len <= 500:
+            print("╟" + "─" * 58 + "╢")
+            for line in config["body_html"].split("\n")[:15]:
+                display = line[:55] + "..." if len(line) > 55 else line
+                print(f"║  {display}".ljust(49) + "║")
+        print("╟" + "─" * 58 + "╢")
+
+    print("║  以上为预览内容，邮件未实际发送。".ljust(49) + "║")
+    print("╚" + "═" * 58 + "╝")
+    print()
+    logger.info("[Preview] 预览完成。确认内容无误后，将 DRY_RUN 设为 False 即可正式发送。")
 
 
 # ============================================================
@@ -470,6 +570,11 @@ def main() -> None:
     except (ValueError, FileNotFoundError) as e:
         logger.error(f"配置校验失败：{e}")
         sys.exit(1)
+
+    # DRY_RUN 预览模式：展示邮件内容后直接退出
+    if config["dry_run"]:
+        dry_run_preview(config)
+        sys.exit(0)
 
     # 按模式运行
     if config["schedule_type"] == "cron":
