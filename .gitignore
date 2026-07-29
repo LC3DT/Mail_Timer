@@ -1,0 +1,12 @@
+# 环境配置（包含敏感信息）
+.env
+
+# 运行日志
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
