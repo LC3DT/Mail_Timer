@@ -13,59 +13,35 @@
 # QQ邮箱：smtp.qq.com，端口 587 或 465
 # 163邮箱：smtp.163.com，端口 587 或 465
 # Gmail：smtp.gmail.com，端口 587 或 465
-SMTP_SERVER=smtp.laobanmail.com
+SMTP_SERVER=smtp.weiyaauto.com
 SMTP_PORT=465
-SMTP_USE_TLS=False
+SMTP_USE_TLS=True
 
 # ---------- 发件人信息 ----------
 # 邮箱地址（需填写完整地址，包含 @ 后面部分）
-SENDER_EMAIL=your_name@your_domain.com
+SENDER_EMAIL=dengyingqi@weiyaauto.com
 # 邮箱密码（即登录网页版邮箱使用的密码）
-SENDER_PASSWORD=your_email_password_here
+SENDER_PASSWORD=weiya@2025
 
 # ---------- 收件人 ----------
 # 多个收件人用英文逗号分隔
-RECIPIENTS=receiver1@example.com,receiver2@example.com
+RECIPIENTS=it@weiyaauto.com
 
 # ---------- 抄送（CC）----------
 # 多个抄送人用英文逗号分隔，不需要请留空
-CC=cc_person@example.com
+CC=zhuchengyu@weiyaauto.com
 
 # ---------- 邮件内容 ----------
-# 编写方式有两种（推荐使用外部文件）：
-#   方式一（文件）：在 .txt / .html 文件中编写正文，下方填写文件路径
-#   方式二（内联）：直接在下方 BODY_TEXT / BODY_HTML 中编写简短内容
-# 文件方式优先级高于内联方式。
-
-SUBJECT=这是一封定时发送的测试邮件
-
-# ---- 方式一：外部文件（推荐，支持富文本编辑器）----
-# 纯文本正文文件路径（如 body.txt）
-BODY_TEXT_FILE=
-# HTML 正文文件路径（如 body.html，可用 Word / VS Code 等编辑后另存为 HTML）
-BODY_HTML_FILE=
-
-# ---- 方式二：内联文本（简短内容可用，文件方式优先）----
+SUBJECT=2025年6月份门禁清单汇报
 # 纯文本正文（与 HTML 至少提供一个）
-BODY_TEXT=你好！这是一封由 Python 定时发送程序自动发送的测试邮件。
+BODY_TEXT=
+
 # HTML 正文（可选，同时提供时邮件客户端优先显示 HTML 版本）
 BODY_HTML=<html><body><h2>你好！</h2><p>这是一封由 <b>Python 定时发送程序</b> 自动发送的测试邮件。</p></body></html>
 
-# ---------- 签名 ----------
-# 邮箱签名（纯文本），在邮件正文末尾显示，不需要请留空
-# 示例：张三 | 技术部 | XX公司 | 电话:138****1234
-SIGNATURE=
-# HTML 格式签名（可选），用于 HTML 邮件中展示更丰富的签名样式（支持图片等）
-# 不配置则使用 SIGNATURE 的纯文本作为 HTML 签名
-SIGNATURE_HTML=
-
-# ---------- 发送时间显示 ----------
-# 是否在邮件正文末尾显示实际发送时间（True=显示，False=不显示）
-SHOW_SEND_TIME=True
-
 # ---------- 附件 ----------
 # 多个附件用英文逗号分隔，不需要请留空
-ATTACHMENTS=
+ATTACHMENTS=Annex/1.txt
 
 # ============================================================
 # 调度模式配置（二选一）
@@ -76,7 +52,7 @@ SCHEDULE_TYPE=once
 
 # ---- 单次模式（SCHEDULE_TYPE=once 时生效）----
 # 格式：YYYY-MM-DD HH:MM:SS（24小时制）
-SCHEDULE_TIME=2026-12-31 09:00:00
+SCHEDULE_TIME=2026-07-29 14:43:00
 
 # ---- 周期模式（SCHEDULE_TYPE=cron 时生效）----
 # Cron 表达式格式：分 时 日 月 周

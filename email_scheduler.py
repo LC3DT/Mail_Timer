@@ -89,6 +89,11 @@ def load_config() -> dict:
         "subject": os.getenv("SUBJECT", "无主题"),
         "body_text": os.getenv("BODY_TEXT", ""),
         "body_html": os.getenv("BODY_HTML", ""),
+        "body_text_file": os.getenv("BODY_TEXT_FILE", ""),
+        "body_html_file": os.getenv("BODY_HTML_FILE", ""),
+        "signature": os.getenv("SIGNATURE", ""),
+        "signature_html": os.getenv("SIGNATURE_HTML", ""),
+        "show_send_time": os.getenv("SHOW_SEND_TIME", "True").lower() in ("true", "1", "yes"),
         # 附件
         "attachments": _parse_list(os.getenv("ATTACHMENTS", "")),
         # 调度模式
@@ -98,6 +103,26 @@ def load_config() -> dict:
     }
 
     return config
+
+
+def resolve_body_files(config: dict) -> None:
+    """
+    如果配置了 BODY_TEXT_FILE / BODY_HTML_FILE，从外部文件加载正文内容。
+    文件内容优先级高于内联 BODY_TEXT / BODY_HTML。
+    """
+    if config["body_text_file"]:
+        path = Path(config["body_text_file"])
+        if not path.is_file():
+            raise FileNotFoundError(f"正文文本文件不存在：{path.resolve()}")
+        config["body_text"] = path.read_text(encoding="utf-8")
+        logger.info(f"已从文件加载纯文本正文：{path.name}（{len(config['body_text'])} 字符）")
+
+    if config["body_html_file"]:
+        path = Path(config["body_html_file"])
+        if not path.is_file():
+            raise FileNotFoundError(f"正文 HTML 文件不存在：{path.resolve()}")
+        config["body_html"] = path.read_text(encoding="utf-8")
+        logger.info(f"已从文件加载 HTML 正文：{path.name}（{len(config['body_html'])} 字符）")
 
 
 # ============================================================
@@ -169,8 +194,41 @@ def build_message(
     body_text: str,
     body_html: str,
     attachments: List[str],
+    signature: str = "",
+    signature_html: str = "",
+    show_send_time: bool = True,
 ) -> MIMEMultipart:
-    """构建完整的 MIME 邮件对象（含抄送、正文、附件）。"""
+    """构建完整的 MIME 邮件对象（含抄送、签名、发送时间、正文、附件）。"""
+    # 发送时间戳
+    send_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if show_send_time else ""
+
+    # 构建纯文本正文：原始正文 + 签名 + 发送时间
+    final_text = body_text
+    if signature or send_time_str:
+        final_text += "\n\n---"
+        if signature:
+            final_text += f"\n{signature}"
+        if send_time_str:
+            final_text += f"\n发送时间：{send_time_str}"
+
+    # 构建 HTML 正文：原始正文 + 签名（HTML） + 发送时间
+    final_html = body_html
+    html_sig = signature_html or (f"<p>{signature}</p>" if signature else "")
+    html_time = f'<p style="color:#888;font-size:12px;">发送时间：{send_time_str}</p>' if send_time_str else ""
+
+    footer_html = ""
+    if html_sig or html_time:
+        footer_html = (
+            '\n<hr style="border:none;border-top:1px solid #ccc;margin-top:20px;">\n'
+            f'<div style="color:#666;font-size:13px;">{html_sig}{html_time}</div>'
+        )
+
+    if footer_html:
+        if "</body>" in final_html:
+            final_html = final_html.replace("</body>", f"{footer_html}\n</body>")
+        else:
+            final_html += footer_html
+
     msg = MIMEMultipart("mixed")
     msg["From"] = sender
     msg["To"] = ", ".join(recipients)
@@ -181,10 +239,10 @@ def build_message(
 
     # 正文（alternative：纯文本 / HTML）
     body_part = MIMEMultipart("alternative")
-    if body_text:
-        body_part.attach(MIMEText(body_text, "plain", "utf-8"))
-    if body_html:
-        body_part.attach(MIMEText(body_html, "html", "utf-8"))
+    if final_text:
+        body_part.attach(MIMEText(final_text, "plain", "utf-8"))
+    if final_html:
+        body_part.attach(MIMEText(final_html, "html", "utf-8"))
     msg.attach(body_part)
 
     # 附件
@@ -222,6 +280,9 @@ def send_email(config: dict) -> bool:
         body_text=config["body_text"],
         body_html=config["body_html"],
         attachments=config["attachments"],
+        signature=config.get("signature", ""),
+        signature_html=config.get("signature_html", ""),
+        show_send_time=config.get("show_send_time", True),
     )
 
     # 信封收件人 = To + Cc（SMTP 实际投递对象）
@@ -399,6 +460,7 @@ def main() -> None:
     try:
         config = load_config()
         logger.info("配置文件加载成功。")
+        resolve_body_files(config)  # 从文件加载正文（如已配置）
     except FileNotFoundError as e:
         logger.error(str(e))
         sys.exit(1)

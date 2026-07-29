@@ -72,11 +72,42 @@ python email_scheduler.py
 | `RECIPIENTS` | 收件人（逗号分隔） | `a@qq.com,b@163.com` |
 | `CC` | 抄送人（逗号分隔，可选） | `cc1@qq.com,cc2@163.com` |
 | `SUBJECT` | 邮件主题 | `每月报表` |
-| `BODY_TEXT` | 纯文本正文 | `你好！...` |
-| `BODY_HTML` | HTML 正文（可选） | `<html>...</html>` |
+| `BODY_TEXT_FILE` | **（推荐）** 纯文本正文文件路径 | `./body.txt` |
+| `BODY_HTML_FILE` | **（推荐）** HTML 正文文件路径 | `./body.html` |
+| `BODY_TEXT` | 内联纯文本正文（文件方式优先） | `你好！...` |
+| `BODY_HTML` | 内联 HTML 正文（文件方式优先） | `<html>...</html>` |
+| `SIGNATURE` | 邮箱签名，附在正文末尾 | `张三 \| 技术部 \| XX公司` |
+| `SIGNATURE_HTML` | HTML 格式签名（可选，支持图片） | `<div>...</div>` |
+| `SHOW_SEND_TIME` | 是否在正文中显示发送时间（True/False） | `True` |
 | `ATTACHMENTS` | 附件路径（逗号分隔，可选） | `./report.pdf` |
 
-> **注意**：`BODY_TEXT` 和 `BODY_HTML` 至少填写一个。同时提供时，客户端优先显示 HTML 版本。
+> **正文编写建议**：推荐使用 `BODY_TEXT_FILE` / `BODY_HTML_FILE` 从外部文件加载正文。HTML 文件可用 Word 另存为 HTML、VS Code 编辑、或任意富文本编辑器创建。文件内容完全替换对应的内联配置项。
+
+> **注意**：`BODY_TEXT` + `BODY_TEXT_FILE` 至少生效一个，`BODY_HTML` + `BODY_HTML_FILE` 同理。文件方式优先于内联方式。
+
+### 推荐：使用外部文件编写邮件正文
+
+直接在 `.env` 中写长文本或 HTML 很不方便。推荐使用外部文件：
+
+**纯文本邮件**：
+
+```bash
+# 1. 用记事本创建 body.txt，编写邮件内容
+# 2. 在 .env 中配置：
+BODY_TEXT_FILE=body.txt
+```
+
+**富文本邮件**（推荐流程）：
+
+```bash
+# 1. 用 Word 编写邮件（支持加粗、颜色、表格等）
+#    「文件」→「另存为」→ 选择「网页(.htm)」→ body.html
+# 2. 或用 VS Code 直接编辑 body.html
+# 3. 在 .env 中配置：
+BODY_HTML_FILE=body.html
+```
+
+项目自带模板文件 `body.txt.example` 和 `body.html.example` 可作为起点。
 
 ### 调度模式
 

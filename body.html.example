@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+    <h2>你好！</h2>
+    <p>这是一封由 <b>Python 定时发送程序</b> 自动发送的测试邮件。</p>
+    <p>你可以在以下编辑器中编辑 HTML 文件：</p>
+    <ul>
+        <li>Microsoft Word → 另存为 HTML</li>
+        <li>VS Code + 预览</li>
+        <li>任意 WYSIWYG 富文本编辑器</li>
+    </ul>
+    <p>然后在 .env 中设置 <code>BODY_HTML_FILE=body.html</code> 即可。</p>
+    <p style="color:#999;">提示：此文件内容会完全替换 .env 中的 BODY_HTML 内联文本。</p>
+</body>
+</html>
