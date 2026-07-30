@@ -1,9 +1,13 @@
 # 环境配置（包含敏感信息）
 .env
+tasks.json
 
 # 运行日志
 *.log
 *.pid
+
+# 附件与正文（含公司内部信息，仅保留在服务器本地）
+Annex/
 
 # Python
 __pycache__/
@@ -11,6 +15,3 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-
-#附件
-Annex/
