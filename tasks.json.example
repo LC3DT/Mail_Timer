@@ -1,0 +1,32 @@
+{
+    "defaults": {
+        "smtp_server": "smtp.weiyaauto.com",
+        "smtp_port": 465,
+        "smtp_use_tls": false,
+        "sender_email": "dengyingqi@weiyaauto.com",
+        "sender_password": "your_password_here",
+        "signature": "dengyingqi | 信息中心",
+        "show_send_time": true,
+        "dry_run": false
+    },
+    "tasks": [
+        {
+            "name": "门禁月报",
+            "subject": "门禁清单汇报",
+            "recipients": ["it@weiyaauto.com"],
+            "cc": ["zhuchengyu@weiyaauto.com"],
+            "body_text_file": "Annex/body.txt",
+            "attachments": ["Annex/1.txt"],
+            "schedule_type": "cron",
+            "schedule_cron": "0 9 25 * *"
+        },
+        {
+            "name": "单次发送示例",
+            "subject": "这是一封单次定时邮件",
+            "recipients": ["it@weiyaauto.com"],
+            "body_text": "这封邮件只发送一次，到点自动发送后该任务即完成。",
+            "schedule_type": "once",
+            "schedule_time": "2026-12-31 09:00:00"
+        }
+    ]
+}

@@ -3,6 +3,7 @@
 
 # 运行日志
 *.log
+*.pid
 
 # Python
 __pycache__/

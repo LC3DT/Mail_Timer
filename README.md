@@ -22,26 +22,44 @@
 
 ```
 Mail_Timer/
-├── email_scheduler.py   # 主程序
-├── .env.example         # 配置文件模板
-├── requirements.txt     # 依赖清单
-├── README.md            # 使用文档
-└── email_scheduler.log  # 运行日志（仅在配置 LOG_FILE 时生成）
+├── email_scheduler.py     # 主程序
+├── .env.example           # 单任务配置模板
+├── tasks.json.example     # 多任务配置模板
+├── start.sh / stop.sh     # Linux 启停脚本
+├── start.bat / stop.bat   # Windows 启停脚本
+├── mail-scheduler.service # systemd 服务模板（Linux 生产环境）
+├── requirements.txt       # 依赖清单
+├── README.md              # 使用文档
+└── email_scheduler.log    # 运行日志（仅在配置 LOG_FILE 时生成）
 ```
 
 ---
 
 ## 快速开始
 
-### 1. 安装依赖
+### 单任务模式（.env）
+
+适合：只需定时发送一封邮件。
 
 ```bash
 pip install -r requirements.txt
+cp .env.example .env
+# 编辑 .env 填入邮箱信息
+python email_scheduler.py
 ```
 
-### 2. 配置邮箱信息
+### 多任务模式（tasks.json）
+
+适合：需要同时管理多封不同邮件（如月报 + 周报），一个进程统一调度。
 
 ```bash
+pip install -r requirements.txt
+cp tasks.json.example tasks.json
+# 编辑 tasks.json，在 defaults 中填入 SMTP 信息，在 tasks 中配置各邮件
+python email_scheduler.py    # 自动检测 tasks.json 进入多任务模式
+```
+
+> **自动检测逻辑**：程序优先检测 `tasks.json`，存在则进入多任务模式；不存在则回退到 `.env` 单任务模式。
 # 复制配置模板
 cp .env.example .env
 
@@ -50,7 +68,7 @@ cp .env.example .env
 
 ### 3. 运行程序
 
-```bash
+```bashk
 python email_scheduler.py
 ```
 
@@ -84,6 +102,45 @@ python email_scheduler.py
 > **正文编写建议**：推荐使用 `BODY_TEXT_FILE` / `BODY_HTML_FILE` 从外部文件加载正文。HTML 文件可用 Word 另存为 HTML、VS Code 编辑、或任意富文本编辑器创建。文件内容完全替换对应的内联配置项。
 
 > **注意**：`BODY_TEXT` + `BODY_TEXT_FILE` 至少生效一个，`BODY_HTML` + `BODY_HTML_FILE` 同理。文件方式优先于内联方式。
+
+### 多任务配置（tasks.json）
+
+多任务模式使用 JSON 格式，`defaults` 中的公共配置（SMTP、签名等）会被所有任务继承，每个任务可覆盖任意字段：
+
+```json
+{
+    "defaults": {
+        "smtp_server": "smtp.weiyaauto.com",
+        "smtp_port": 465,
+        "sender_email": "name@company.com",
+        "sender_password": "密码",
+        "signature": "统一签名",
+        "show_send_time": true
+    },
+    "tasks": [
+        {
+            "name": "月报",
+            "subject": "月报主题",
+            "recipients": ["a@t.com"],
+            "cc": ["cc@t.com"],
+            "body_text_file": "body.txt",
+            "attachments": ["report.pdf"],
+            "schedule_type": "cron",
+            "schedule_cron": "0 9 25 * *"
+        },
+        {
+            "name": "周报",
+            "subject": "周报主题",
+            "recipients": ["b@t.com"],
+            "body_text": "内联正文...",
+            "schedule_type": "cron",
+            "schedule_cron": "0 9 * * 5"
+        }
+    ]
+}
+```
+
+每任务字段与 `.env` 配置项完全对应（`name` 和 `recipients` 格式除外：JSON 中 `recipients`/`cc` 用数组而非逗号分隔字符串）。
 
 ### 推荐：使用外部文件编写邮件正文
 
@@ -274,3 +331,109 @@ A: 程序已默认优化：
 - cron 模式下无心跳日志（真正静默运行）
 
 如需进一步降低，可在任务管理器中设为"低优先级"。
+
+---
+
+## 服务器部署（Ubuntu / Debian）
+
+### 方案一：Shell 脚本后台运行（推荐，最简单）
+
+```bash
+# 1. 上传项目到服务器
+scp -r Mail_Timer user@server:/opt/
+
+# 2. 安装依赖
+cd /opt/Mail_Timer
+pip3 install -r requirements.txt
+
+# 3. 配置
+cp .env.example .env        # 单任务
+# 或
+cp tasks.json.example tasks.json  # 多任务
+
+# 4. 后台启动（nohup 保证关终端不中断）
+./start.sh
+
+# 5. 管理
+./status.sh    # 查看状态 + 最近日志
+./stop.sh      # 停止程序
+```
+
+### 方案二：systemd 服务（生产环境推荐，开机自启）
+
+```bash
+# 1. 编辑服务文件中的路径
+sudo nano mail-scheduler.service
+# 确认 WorkingDirectory=/opt/Mail_Timer 与实际路径一致
+
+# 2. 安装服务
+sudo cp mail-scheduler.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable mail-scheduler    # 开机自启
+sudo systemctl start mail-scheduler     # 立即启动
+
+# 3. 日常管理
+sudo systemctl status mail-scheduler    # 查看状态
+sudo journalctl -u mail-scheduler -f    # 实时日志
+sudo systemctl stop mail-scheduler      # 停止
+sudo systemctl restart mail-scheduler   # 重启
+```
+
+### 方案三：crontab 定时触发（适合 once 单次模式）
+
+```bash
+# 每天 9:00 执行一次发送
+crontab -e
+0 9 * * * cd /opt/Mail_Timer && /usr/bin/python3 email_scheduler.py
+```
+
+---
+
+## 服务器部署（Windows Server）
+
+程序需要持续运行（尤其是 cron 模式），关闭远程桌面窗口会导致进程终止。以下方案任选其一：
+
+### 方案一：bat 脚本后台运行（推荐，最简单）
+
+```bash
+# 启动（无命令行窗口，关闭远程桌面不影响）
+双击 start.bat
+
+# 查看状态
+双击 status.bat
+
+# 停止
+双击 stop.bat
+```
+
+原理：`start.bat` 使用 `pythonw.exe` 启动程序（无控制台窗口），PID 写入 `email_scheduler.pid` 文件。`stop.bat` 读取 PID 并终止进程。关闭远程桌面窗口不影响后台进程。
+
+### 方案二：Windows 任务计划程序（适合 once 单次模式）
+
+1. 打开「任务计划程序」→「创建基本任务」
+2. 触发器：按需求设置时间（如每天 9:00）
+3. 操作：启动程序 → `pythonw.exe`，参数填 `email_scheduler.py`，起始于程序目录
+4. 勾选「不管用户是否登录都要运行」
+5. 这样服务器重启后也会自动按计划触发
+
+### 方案三：设为 Windows 服务（适合 cron 模式 + 开机自启）
+
+```bash
+# 1. 下载 NSSM (https://nssm.cc/download)
+# 2. 安装服务
+nssm install MailScheduler
+#    路径: C:\Python313\pythonw.exe
+#    参数: email_scheduler.py
+#    起始目录: D:\Mail_Timer
+
+# 3. 管理
+nssm start MailScheduler     # 启动
+nssm stop MailScheduler      # 停止
+nssm status MailScheduler    # 状态
+```
+
+### 服务器重启后自动恢复
+
+无论哪种方案，建议配合：
+- 方案一 + 任务计划程序（触发器设为「系统启动时」执行 `start.bat`）
+- 方案三：服务自动随系统启动

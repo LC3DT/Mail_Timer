@@ -1,0 +1,25 @@
+[Unit]
+Description=邮件定时发送程序
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nobody
+WorkingDirectory=/opt/Mail_Timer
+ExecStart=/usr/bin/python3 /opt/Mail_Timer/email_scheduler.py
+ExecStop=/bin/kill $MAINPID
+Restart=on-failure
+RestartSec=30
+StandardOutput=append:/opt/Mail_Timer/email_scheduler.log
+StandardError=append:/opt/Mail_Timer/email_scheduler.log
+
+# 安全加固
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/Mail_Timer
+
+[Install]
+WantedBy=multi-user.target

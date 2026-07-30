@@ -11,10 +11,13 @@
 
 import os
 import sys
+import json
 import time
+import atexit
 import logging
 import threading
 import smtplib
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -107,6 +110,83 @@ def load_config() -> dict:
     return config
 
 
+# ============================================================
+# 多任务 JSON 配置
+# ============================================================
+def _normalize_config_keys(d: dict) -> dict:
+    """
+    将常见大写键名（兼容 .env 命名习惯）映射到规范小写键名。
+    用户既可用 JSON 小写键名，也可用与 .env 一致的大写键名。
+    """
+    KEY_MAP = {
+        "SCHEDULE_TIME": "schedule_time", "SCHEDULE_CRON": "schedule_cron",
+        "SCHEDULE_TYPE": "schedule_type", "SMTP_SERVER": "smtp_server",
+        "SMTP_PORT": "smtp_port", "SMTP_USE_TLS": "smtp_use_tls",
+        "SENDER_EMAIL": "sender_email", "SENDER_PASSWORD": "sender_password",
+        "RECIPIENTS": "recipients", "CC": "cc",
+        "SUBJECT": "subject", "BODY_TEXT": "body_text",
+        "BODY_HTML": "body_html", "BODY_TEXT_FILE": "body_text_file",
+        "BODY_HTML_FILE": "body_html_file", "SIGNATURE": "signature",
+        "SIGNATURE_HTML": "signature_html", "SHOW_SEND_TIME": "show_send_time",
+        "ATTACHMENTS": "attachments", "DRY_RUN": "dry_run",
+        "LOG_FILE": "log_file", "NAME": "name",
+    }
+    for old, new in KEY_MAP.items():
+        if old in d and new not in d:
+            d[new] = d.pop(old)
+    return d
+
+
+def load_tasks_json(filepath: str = "tasks.json") -> list:
+    """
+    从 JSON 文件加载多任务配置。
+    支持 defaults 段（被各 task 继承），每个 task 可覆盖任意字段。
+    键名兼容大写（如 SCHEDULE_TIME）和小写（如 schedule_time）。
+    返回 list[dict]，每个 dict 为合并后的完整配置。
+    """
+    path = Path(filepath)
+    if not path.is_file():
+        raise FileNotFoundError(f"任务配置文件未找到：{path.resolve()}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    defaults = _normalize_config_keys(data.get("defaults", {}))
+    tasks = data.get("tasks", [])
+
+    if not tasks:
+        raise ValueError("tasks.json 中 tasks 列表不能为空。")
+
+    result = []
+    for i, task in enumerate(tasks):
+        task = _normalize_config_keys(task)
+        merged = deepcopy(defaults)
+        merged.update(task)
+        # 确保必要字段有默认值
+        merged.setdefault("name", f"task-{i + 1}")
+        merged.setdefault("subject", "无主题")
+        merged.setdefault("body_text", "")
+        merged.setdefault("body_html", "")
+        merged.setdefault("body_text_file", "")
+        merged.setdefault("body_html_file", "")
+        merged.setdefault("signature", "")
+        merged.setdefault("signature_html", "")
+        merged.setdefault("show_send_time", True)
+        merged.setdefault("cc", [])
+        merged.setdefault("attachments", [])
+        merged.setdefault("schedule_type", "once")
+        merged.setdefault("schedule_time", "")
+        merged.setdefault("schedule_cron", "")
+        merged.setdefault("dry_run", False)
+        merged.setdefault("smtp_use_tls", False)
+        result.append(merged)
+
+    return result
+
+
+# ============================================================
+# 正文文件加载
+# ============================================================
 def resolve_body_files(config: dict) -> None:
     """
     如果配置了 BODY_TEXT_FILE / BODY_HTML_FILE，从外部文件加载正文内容。
@@ -464,12 +544,24 @@ def _send_and_exit(config: dict) -> None:
 
 def _send_and_continue(config: dict) -> None:
     """cron 模式回调：发送邮件后继续等待下一次触发。"""
-    logger.info("[Trigger] Cron 触发，开始执行发送任务...")
+    task_name = config.get("name", "")
+    logger.info(f"[Trigger] [{task_name}] Cron 触发，开始执行发送任务...")
     success = send_email(config)
     if success:
-        logger.info("本次发送完成，等待下一次 cron 触发...")
+        logger.info(f"[{task_name}] 本次发送完成，等待下一次 cron 触发...")
     else:
-        logger.error("本次发送失败，等待下一次 cron 触发...")
+        logger.error(f"[{task_name}] 本次发送失败，等待下一次 cron 触发...")
+
+
+def _send_once_no_exit(config: dict) -> None:
+    """多任务 once 模式回调：发送邮件但不退出进程（其他任务可能还在运行）。"""
+    task_name = config.get("name", "")
+    logger.info(f"[Trigger] [{task_name}] 到达预定时间，开始执行发送任务...")
+    success = send_email(config)
+    if success:
+        logger.info(f"[{task_name}] 单次任务发送完成。")
+    else:
+        logger.error(f"[{task_name}] 单次任务发送失败。")
 
 
 def _run_once_mode(config: dict) -> None:
@@ -549,18 +641,132 @@ def _run_cron_mode(config: dict) -> None:
 
 
 # ============================================================
+# 多任务模式
+# ============================================================
+def _run_multi_mode(tasks: list) -> None:
+    """多任务调度：一个调度器管理所有任务，共享进程。"""
+    logger.info(f"多任务模式：共加载 {len(tasks)} 个任务")
+    for t in tasks:
+        logger.info(
+            f"  - [{t['name']}] "
+            f"收件人={t['recipients']}, "
+            f"模式={t['schedule_type']}, "
+            f"{'cron=' + t['schedule_cron'] if t['schedule_type'] == 'cron' else '时间=' + t['schedule_time']}"
+        )
+
+    scheduler = BackgroundScheduler()
+    now = datetime.now()
+    has_pending_once = False
+
+    for i, task in enumerate(tasks):
+        job_id = f"task_{i}_{task['name']}"
+
+        if task["schedule_type"] == "cron":
+            scheduler.add_job(
+                _send_and_continue,
+                trigger=CronTrigger.from_crontab(task["schedule_cron"]),
+                args=[task],
+                id=job_id,
+                name=f"[{task['name']}] cron",
+            )
+        else:
+            schedule_time = datetime.strptime(task["schedule_time"], "%Y-%m-%d %H:%M:%S")
+            if schedule_time <= now:
+                logger.warning(f"[{task['name']}] 指定时间 {schedule_time} 已过期，将立即发送。")
+                _send_once_no_exit(task)
+            else:
+                has_pending_once = True
+                scheduler.add_job(
+                    _send_once_no_exit,
+                    trigger=DateTrigger(run_date=schedule_time),
+                    args=[task],
+                    id=job_id,
+                    name=f"[{task['name']}] once",
+                )
+                wait_s = (schedule_time - now).total_seconds()
+                logger.info(f"[{task['name']}] 已排程，将于 {schedule_time} 发送（{wait_s / 60:.0f} 分钟后）。")
+
+    scheduler.start()
+    logger.info("调度器已启动，静默等待触发...")
+
+    if not has_pending_once:
+        # 全部已发送或无定时任务，仅 cron 在跑
+        pass
+
+    # 零 CPU 阻塞等待
+    try:
+        _stop_event.wait()
+    except KeyboardInterrupt:
+        logger.info("用户中断，程序退出。")
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+# ============================================================
 # 主入口
 # ============================================================
+# PID 文件（用于后台运行管理）
+_PID_FILE = Path(__file__).resolve().parent / "email_scheduler.pid"
+
+
+def _write_pid() -> None:
+    """写入当前进程 PID 到文件。"""
+    _PID_FILE.write_text(str(os.getpid()))
+
+
+def _cleanup_pid() -> None:
+    """删除 PID 文件。"""
+    try:
+        if _PID_FILE.is_file():
+            _PID_FILE.unlink()
+    except Exception:
+        pass
+
+
 def main() -> None:
-    """程序入口。"""
+    """程序入口。自动检测 tasks.json（多任务）或 .env（单任务）。"""
+    _write_pid()
+    atexit.register(_cleanup_pid)
     logger.info("=" * 50)
     logger.info("[Mail] 邮件定时发送程序 启动")
 
-    # 加载 & 校验配置
+    # 检测多任务配置文件
+    tasks_json_path = Path(__file__).resolve().parent / "tasks.json"
+    if tasks_json_path.is_file():
+        # --- 多任务模式 ---
+        try:
+            tasks = load_tasks_json(str(tasks_json_path))
+            for task in tasks:
+                resolve_body_files(task)
+                validate_config(task)
+        except (FileNotFoundError, ValueError) as e:
+            logger.error(str(e))
+            sys.exit(1)
+
+        # DRY_RUN 预览
+        dry_tasks = [t for t in tasks if t.get("dry_run")]
+        if dry_tasks:
+            for task in dry_tasks:
+                logger.info(f"\n{'=' * 50}")
+                logger.info(f"预览任务：{task['name']}")
+                dry_run_preview(task)
+            # 如果所有任务都是 dry_run，预览后退出
+            if len(dry_tasks) == len(tasks):
+                sys.exit(0)
+
+        # 过滤掉 dry_run 的任务，运行其余
+        active_tasks = [t for t in tasks if not t.get("dry_run")]
+        if not active_tasks:
+            logger.info("所有任务均为 DRY_RUN 模式，无实际发送任务，退出。")
+            sys.exit(0)
+        _run_multi_mode(active_tasks)
+        return
+
+    # --- 单任务模式（.env） ---
     try:
         config = load_config()
         logger.info("配置文件加载成功。")
-        resolve_body_files(config)  # 从文件加载正文（如已配置）
+        resolve_body_files(config)
     except FileNotFoundError as e:
         logger.error(str(e))
         sys.exit(1)
@@ -571,12 +777,10 @@ def main() -> None:
         logger.error(f"配置校验失败：{e}")
         sys.exit(1)
 
-    # DRY_RUN 预览模式：展示邮件内容后直接退出
     if config["dry_run"]:
         dry_run_preview(config)
         sys.exit(0)
 
-    # 按模式运行
     if config["schedule_type"] == "cron":
         _run_cron_mode(config)
     else:
